@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Haxagon Solver (dry-run)",
+      "runtimeExecutable": "python3.14",
+      "runtimeArgs": ["main.py", "--dry-run"],
+      "port": 0
+    },
+    {
+      "name": "Haxagon Solver (submit)",
+      "runtimeExecutable": "python3.14",
+      "runtimeArgs": ["main.py"],
+      "port": 0
+    },
+    {
+      "name": "Tests",
+      "runtimeExecutable": "python3.14",
+      "runtimeArgs": ["-m", "pytest", "tests/", "-v"],
+      "port": 0
+    }
+  ]
+}
