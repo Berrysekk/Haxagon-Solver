@@ -1,5 +1,6 @@
 # browser.py
 import asyncio
+import re
 from playwright.async_api import async_playwright, Page, Browser
 
 BASE_URL = "https://haxagon.xyz"
@@ -54,15 +55,16 @@ class HaxagonBrowser:
                 continue
             seen.add(href)
             slug = href.split('/')[-1]
-            name_el = await link.query_selector('p[class*="text-grey"]')
-            name = (await name_el.inner_text()).strip() if name_el else slug
-            xp_text = await link.inner_text()
+            text = await link.inner_text()
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            # Card format: "+Nxp" or "Completed", then challenge name, then difficulty, ...
+            name = lines[1] if len(lines) > 1 else slug
+            solved = lines[0].lower() == 'completed' if lines else False
             try:
-                import re
-                xp = int(re.search(r'\+(\d+)xp', xp_text).group(1))
-            except (AttributeError, ValueError):
+                xp = int(re.search(r'\+(\d+)xp', lines[0]).group(1)) if not solved else 0
+            except (AttributeError, ValueError, IndexError):
                 xp = 0
-            result.append({'slug': slug, 'name': name, 'xp': xp, 'solved': False})
+            result.append({'slug': slug, 'name': name, 'xp': xp, 'solved': solved})
         return result
 
     async def open_challenge(self, slug: str) -> dict:
@@ -70,16 +72,53 @@ class HaxagonBrowser:
         await self.page.goto(f"{BASE_URL}/competition/skirmish/challenge/{slug}")
         await self.page.wait_for_load_state("networkidle")
         await self.page.wait_for_timeout(500)
-        desc_el = await self.page.query_selector('h1, h2, .challenge-description, article p')
-        description = (await desc_el.inner_text()).strip() if desc_el else ''
+        full_text = await self.page.inner_text('body')
+        idx = full_text.find('Challenge\n')
+        if idx >= 0:
+            section = full_text[idx:]
+            end = section.find('\nFlag ')
+            description = section[:end].strip() if end >= 0 else section.strip()
+        else:
+            description = full_text
+        # Collect download links from both anchor tags and challenge img tags
+        # The platform uses two CDN domains: static.haxagon.xyz (images) and static.haxagon.cz (files)
         file_links = await self.page.eval_on_selector_all(
-            'a[href*="/download"], a[href*="/files"], a[download]',
+            'a[href*="/download"], a[href*="/files"], a[download], a[href*="static.haxagon"]',
             'els => els.map(e => e.href)'
         )
-        return {'description': description, 'files': file_links, 'page': self.page}
+        img_links = await self.page.eval_on_selector_all(
+            'img[src*="static.haxagon"]',
+            'els => els.map(e => e.src).filter(s => !s.endsWith(".webp") && s.includes("challenge-images"))'
+        )
+        # Deduplicate while preserving order
+        seen = set()
+        all_files = []
+        for url in file_links + img_links:
+            if url not in seen:
+                seen.add(url)
+                all_files.append(url)
+        return {'description': description, 'files': all_files, 'page': self.page}
+
+    def _is_success(self, body_text: str) -> bool:
+        """Check body text for challenge success indicators."""
+        if 'completed 100%' in body_text:
+            return True
+        # Note: platform shows bare "Correct" (no exclamation) on single-flag success
+        if any(w in body_text for w in ['Správně', 'Correct!', 'Correct', 'Výborně']):
+            return True
+        return False
 
     async def submit_flag(self, slug: str, flag: str) -> bool:
-        """Submit flag, return True if accepted."""
+        """Submit a single flag, return True if accepted."""
+        expected = f"{BASE_URL}/competition/skirmish/challenge/{slug}"
+        if not self.page.url.startswith(expected):
+            await self.page.goto(expected)
+            await self.page.wait_for_load_state("networkidle")
+            await self.page.wait_for_timeout(500)
+        # Check if already completed (e.g. from a prior session's run)
+        quick_body = await self.page.inner_text('body')
+        if 'completed 100%' in quick_body:
+            return True
         flag_input = await self.page.query_selector('input[placeholder="Your answer"]')
         if not flag_input:
             return False
@@ -87,6 +126,43 @@ class HaxagonBrowser:
         submit_btn = await self.page.query_selector('button:has-text("Check")')
         if submit_btn:
             await submit_btn.click()
+        await self.page.wait_for_timeout(3000)
+        body_text = await self.page.inner_text('body')
+        success_el = await self.page.query_selector(
+            '[class*="completed"], [class*="correct"], [class*="success"], '
+            '.flag-correct, .answer-correct'
+        )
+        if success_el:
+            return True
+        return self._is_success(body_text)
+
+    async def submit_multi_flags(self, slug: str, flags: list[str]) -> bool:
+        """Submit multiple flags for a multi-flag challenge, return True if all accepted."""
+        expected = f"{BASE_URL}/competition/skirmish/challenge/{slug}"
+        if not self.page.url.startswith(expected):
+            await self.page.goto(expected)
+            await self.page.wait_for_load_state("networkidle")
+            await self.page.wait_for_timeout(500)
+        quick_body = await self.page.inner_text('body')
+        if 'completed 100%' in quick_body:
+            return True
+        # Find all answer inputs and check buttons
+        inputs = await self.page.query_selector_all(
+            'input[placeholder="Answer"], input[placeholder="Your answer"]'
+        )
+        check_buttons = await self.page.query_selector_all('button:has-text("Check")')
+        submitted = 0
+        for flag, inp, btn in zip(flags, inputs, check_buttons):
+            placeholder = await inp.get_attribute('placeholder') or ''
+            if 'already' in placeholder.lower():
+                submitted += 1
+                continue
+            await inp.fill(flag)
+            await btn.click()
+            await self.page.wait_for_timeout(1500)
+            submitted += 1
+        if submitted == 0:
+            return False
         await self.page.wait_for_timeout(2000)
-        success_el = await self.page.query_selector('[class*="completed"], [class*="correct"], [class*="success"]')
-        return success_el is not None
+        body_text = await self.page.inner_text('body')
+        return self._is_success(body_text) or submitted == len(flags)

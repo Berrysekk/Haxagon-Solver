@@ -6,11 +6,17 @@ Usage: python main.py [--phase 1|2|3|4] [--dry-run]
 import asyncio
 import argparse
 import importlib
+import inspect
+import re
 import sys
 
 from browser import HaxagonBrowser
 from state import State
 from registry import get_solver
+
+
+def name_to_slug(name: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '-', name.lower().strip()).strip('-')
 
 CREDENTIALS = {
     "email": "beranek.ja.2024@skola.ssps.cz",
@@ -30,7 +36,7 @@ async def run(phases: list[int], dry_run: bool):
         mod = PHASE_MODULES.get(phase)
         if mod:
             try:
-                importlib.import_module(mod)
+                importlib.import_module(mod)  # nosemgrep — module name comes from a fixed allowlist (PHASE_MODULES / EnumType.value)
             except ModuleNotFoundError as e:
                 print(f"[warn] Could not load phase {phase}: {e}")
 
@@ -49,6 +55,8 @@ async def run(phases: list[int], dry_run: bool):
 
         for ch in challenges:
             slug = ch["slug"]
+            if ch.get("solved"):
+                continue  # already solved on platform, no XP left to earn
             if state.is_solved(slug):
                 print(f"[skip] {ch['name']} — already solved")
                 continue
@@ -56,7 +64,7 @@ async def run(phases: list[int], dry_run: bool):
                 print(f"[skip] {ch['name']} — marked skipped")
                 continue
 
-            solver = get_solver(slug)
+            solver = get_solver(slug) or get_solver(name_to_slug(ch["name"]))
             if not solver:
                 print(f"[no solver] {ch['name']} ({slug})")
                 continue
@@ -65,7 +73,7 @@ async def run(phases: list[int], dry_run: bool):
             ctx = await browser.open_challenge(slug)
 
             try:
-                if asyncio.iscoroutinefunction(solver):
+                if inspect.iscoroutinefunction(solver):
                     flag = await solver(ctx)
                 else:
                     flag = solver(ctx)
@@ -79,14 +87,20 @@ async def run(phases: list[int], dry_run: bool):
                 state.mark_skipped(slug)
                 continue
 
-            print(f"  [flag] {flag}")
+            # Normalise to list; single-flag challenges return a string
+            flags = flag if isinstance(flag, list) else [flag]
+            print(f"  [flag] {flags[0]}" + (f" (+{len(flags)-1} more)" if len(flags) > 1 else ""))
             if dry_run:
                 print("  [dry-run] Not submitting.")
                 continue
 
-            accepted = await browser.submit_flag(slug, flag)
+            if len(flags) == 1:
+                accepted = await browser.submit_flag(slug, flags[0])
+            else:
+                accepted = await browser.submit_multi_flags(slug, flags)
+
             if accepted:
-                state.mark_solved(slug, flag=flag, xp=ch["xp"])
+                state.mark_solved(slug, flag=flags[0], xp=ch["xp"])
                 print(f"  [accepted] +{ch['xp']} XP")
             else:
                 print(f"  [rejected] Flag was wrong or submit failed.")
