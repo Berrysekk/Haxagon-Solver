@@ -1,7 +1,7 @@
 playwright==1.44.*
 requests==2.31.*
 Pillow==10.*
-pdfminer.six==20221105
+pdfminer.six==20260107
 python-magic==0.4.*
 pyzbar==0.1.*
 qrcode==7.*
