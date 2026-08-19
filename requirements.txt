@@ -4,6 +4,6 @@ Pillow==10.*
 pdfminer.six==20221105
 python-magic==0.4.*
 pyzbar==0.1.*
-qrcode==7.*
+qrcode==8.*
 pytest==8.*
 pytest-asyncio==0.23.*
