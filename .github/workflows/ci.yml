@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          # playwright 1.44 (pinned in requirements.txt) supports <=3.12.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: System libraries
+        # pyzbar needs libzbar, python-magic needs libmagic — both are C
+        # libraries the wheels dlopen at import time, so the tests fail to
+        # collect without them.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libzbar0 libmagic1
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ruff
+        # TODO(non-blocking): repo has never been linted. Flip to blocking once
+        # the backlog is cleared.
+        continue-on-error: true
+        run: |
+          pip install ruff
+          ruff check .
+
+      - name: Pytest
+        # No Playwright browsers installed on purpose: the browser tests use
+        # fakes, nothing here drives a real page.
+        run: pytest -q
+
+      - name: pip-audit
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
