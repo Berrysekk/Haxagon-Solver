@@ -5,5 +5,5 @@ pdfminer.six==20221105
 python-magic==0.4.*
 pyzbar==0.1.*
 qrcode==8.*
-pytest==8.*
+pytest==9.*
 pytest-asyncio==1.4.*
