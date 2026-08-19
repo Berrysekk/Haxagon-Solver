@@ -1,5 +1,5 @@
 playwright==1.44.*
-requests==2.31.*
+requests==2.34.*
 Pillow==10.*
 pdfminer.six==20221105
 python-magic==0.4.*
