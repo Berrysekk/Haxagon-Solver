@@ -1,4 +1,4 @@
-playwright==1.62.*
+playwright==1.63.*
 requests==2.34.*
 Pillow==12.*
 pdfminer.six==20260107
